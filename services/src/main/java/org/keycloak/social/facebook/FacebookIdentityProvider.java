@@ -17,8 +17,12 @@
 
 package org.keycloak.social.facebook;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import java.nio.charset.StandardCharsets;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.jboss.resteasy.util.Hex;
 import org.keycloak.broker.oidc.AbstractOAuth2IdentityProvider;
 import org.keycloak.broker.oidc.mappers.AbstractJsonUserAttributeMapper;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
@@ -28,6 +32,8 @@ import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.saml.common.util.StringUtil;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -39,7 +45,7 @@ public class FacebookIdentityProvider extends AbstractOAuth2IdentityProvider<Fac
 	public static final String PROFILE_URL = "https://graph.facebook.com/me?fields=id,name,email,first_name,last_name";
 	public static final String DEFAULT_SCOPE = "email";
 	protected static final String PROFILE_URL_FIELDS_SEPARATOR = ",";
-
+		
 	public FacebookIdentityProvider(KeycloakSession session, FacebookIdentityProviderConfig config) {
 		super(session, config);
 		config.setAuthorizationUrl(AUTH_URL);
@@ -50,10 +56,20 @@ public class FacebookIdentityProvider extends AbstractOAuth2IdentityProvider<Fac
 	protected BrokeredIdentityContext doGetFederatedIdentity(String accessToken) {
 		try {
 			final String fetchedFields = getConfig().getFetchedFields();
-			final String url = StringUtil.isNotNull(fetchedFields)
+			String url = StringUtil.isNotNull(fetchedFields)
 					? String.join(PROFILE_URL_FIELDS_SEPARATOR, PROFILE_URL, fetchedFields)
 					: PROFILE_URL;
-			JsonNode profile = SimpleHttp.doGet(url, session).header("Authorization", "Bearer " + accessToken).asJson();
+			
+			SecretKeySpec sk = new SecretKeySpec(this.getConfig().getClientSecret().getBytes(StandardCharsets.UTF_8.toString()), "HmacSHA256");
+			Mac apiToken = Mac.getInstance("HmacSHA256");
+			apiToken.init(sk);
+					
+			url += "&appsecret_proof=" + Hex.encodeHex(apiToken.doFinal(accessToken.getBytes(StandardCharsets.ISO_8859_1))); 
+			
+			JsonNode profile = SimpleHttp.doGet(url, session)
+					.header("Authorization", "Bearer " + accessToken).
+					asJson();
+			
 			return extractIdentityFromProfile(null, profile);
 		} catch (Exception e) {
 			throw new IdentityBrokerException("Could not obtain user profile from facebook.", e);
